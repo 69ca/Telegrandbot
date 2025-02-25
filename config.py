@@ -1,5 +1,5 @@
-# توكن بوت تليغرام
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+# توكن بوت تليغرام# توكن بوت تليغرام
+BOT_TOKEN = "7902349650:AAGLYx3idgTm0jtQECeA2BXCMqQjQuH0QFQ"
 
 # خيارات جودة فيديوهات يوتيوب
 YOUTUBE_QUALITIES = {
