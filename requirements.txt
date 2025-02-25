@@ -1,8 +1,6 @@
-python-telegram-bot==20.3
-yt-dlp
-mutagen
-pillow
-requests
-instaloader
-pytube
-telebot
+python-telegram-bot==13.7
+requests==2.28.1
+yt-dlp==2023.3.4
+instaloader==4.9.0  # لتنزيل الوسائط من إنستغرام
+tiktok-downloader==1.0.0  # لتنزيل الوسائط من تيك توك
+​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
