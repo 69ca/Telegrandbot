@@ -1,73 +1,125 @@
-import os
-import logging
-import yt_dlp
-import instaloader
+import telegram
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import requests
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pytube import YouTube
-from mutagen.mp3 import MP3
-from PIL import Image
+import yt_dlp
+import os
+from config import BOT_TOKEN, YOUTUBE_QUALITIES, INSTAGRAM_API_KEY, TIKTOK_API_KEY
 
-# إعدادات البوت
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-bot = telebot.TeleBot(TOKEN)
+# تهيئة البوت
+bot = telegram.Bot(token=BOT_TOKEN)
+updater = Updater(BOT_TOKEN, use_context=True)
 
-# إعداد تسجيل الأخطاء
-logging.basicConfig(level=logging.INFO)
+def start(update, context):
+    """معالجة أمر /start"""
+    context.bot.send_message(chat_id=update.effective_chat.id, 
+                            text="مرحبًا! أرسل رابطًا لصورة، فيديو، ستوري، ريلز، أو فيديو يوتيوب للتنزيل.")
 
-# دالة تحميل فيديو من يوتيوب كملف صوتي مع صورة مصغرة
-def download_youtube_audio(url):
-    yt = YouTube(url)
-    filename = f"{yt.title}.mp3"
-    thumbnail_url = yt.thumbnail_url
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': filename,
-        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}],
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
-    # تحميل الصورة المصغرة
-    thumbnail_filename = f"{yt.title}.jpg"
-    response = requests.get(thumbnail_url)
-    with open(thumbnail_filename, 'wb') as f:
-        f.write(response.content)
-
-    return filename, thumbnail_filename, yt.title
-
-# دالة لتحميل ستوريات انستجرام
-def download_instagram_story(username):
-    loader = instaloader.Instaloader()
-    loader.download_profiles([username], profile_pic_only=False, stories=True)
-    return f"{username}_stories"
-
-# استقبال الرسائل من المستخدم
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.send_message(message.chat.id, "أهلاً! أرسل لي رابط فيديو أو صورة وسأقوم بتحميلها لك!")
-
-@bot.message_handler(func=lambda message: message.text.startswith("http"))
-def handle_url(message):
-    url = message.text
+def handle_link(update, context):
+    """معالجة الروابط المرسلة من المستخدم"""
+    url = update.message.text
+    chat_id = update.effective_chat.id
 
     if "youtube.com" in url or "youtu.be" in url:
-        filename, thumbnail, title = download_youtube_audio(url)
-        with open(thumbnail, 'rb') as thumb, open(filename, 'rb') as audio:
-            bot.send_audio(message.chat.id, audio, title=title, thumb=thumb)
-
+        show_youtube_options(chat_id, url, context)
     elif "instagram.com" in url:
-        if "/stories/" in url:
-            username = url.split("/")[-2]
-            folder = download_instagram_story(username)
-            bot.send_message(message.chat.id, f"تم تحميل ستوريات {username}")
-
+        download_instagram_media(url, chat_id, context)
+    elif "tiktok.com" in url:
+        download_tiktok_media(url, chat_id, context)
+    elif "twitter.com" in url:
+        download_twitter_media(url, chat_id, context)
     else:
-        bot.send_message(message.chat.id, "هذا الرابط غير مدعوم حالياً.")
+        context.bot.send_message(chat_id=chat_id, text="الرابط غير مدعوم. يرجى إرسال رابط من يوتيوب، إنستغرام، تيك توك، أو تويتر.")
 
-# تشغيل البوت
-if __name__ == "__main__":
-    bot.polling()
+def show_youtube_options(chat_id, url, context):
+    """عرض خيارات جودة الفيديو لتنزيل فيديوهات يوتيوب"""
+    keyboard = [
+        [InlineKeyboardButton("240p", callback_data=f"youtube_{url}_1"),
+         InlineKeyboardButton("480p", callback_data=f"youtube_{url}_2")],
+        [InlineKeyboardButton("720p", callback_data=f"youtube_{url}_3"),
+         InlineKeyboardButton("1080p", callback_data=f"youtube_{url}_4")],
+        [InlineKeyboardButton("ملف صوتي", callback_data=f"youtube_{url}_5")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    context.bot.send_message(chat_id=chat_id, text="اختر جودة الفيديو:", reply_markup=reply_markup)
+
+def handle_youtube_choice(update, context):
+    """معالجة اختيار جودة الفيديو من يوتيوب"""
+    query = update.callback_query
+    query.answer()
+    data = query.data.split('_')
+    url = data[1]
+    choice = data[2]
+    chat_id = query.message.chat_id
+
+    ydl_opts = {
+        'outtmpl': '%(title)s.%(ext)s',
+        'format': YOUTUBE_QUALITIES.get(choice, 'best'),
+    }
+
+    if choice == '5':  # تنزيل ملف صوتي فقط
+        ydl_opts.update({'extract_audio': True, 'audio_format': 'mp3'})
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            file_path = ydl.prepare_filename(info)
+            if choice == '5':
+                context.bot.send_audio(chat_id=chat_id, audio=open(file_path, 'rb'), 
+                                    title=info['title'])
+            else:
+                context.bot.send_video(chat_id=chat_id, video=open(file_path, 'rb'))
+            os.remove(file_path)  # حذف الملف بعد الإرسال
+    except Exception as e:
+        context.bot.send_message(chat_id=chat_id, text=f"حدث خطأ: {str(e)}")
+
+def download_instagram_media(url, chat_id, context):
+    """تنزيل الوسائط من إنستغرام"""
+    try:
+        response = requests.get(url, allow_redirects=True)
+        if "image" in response.headers.get('Content-Type', ''):
+            context.bot.send_photo(chat_id=chat_id, photo=response.content)
+        elif "video" in response.headers.get('Content-Type', ''):
+            context.bot.send_video(chat_id=chat_id, video=response.content)
+        else:
+            context.bot.send_message(chat_id=chat_id, text="لا يمكن تنزيل هذا النوع من الملفات من إنستغرام.")
+    except Exception as e:
+        context.bot.send_message(chat_id=chat_id, text=f"حدث خطأ: {str(e)}")
+
+def download_tiktok_media(url, chat_id, context):
+    """تنزيل الوسائط من تيك توك"""
+    try:
+        response = requests.get(url, allow_redirects=True)
+        if "video" in response.headers.get('Content-Type', ''):
+            context.bot.send_video(chat_id=chat_id, video=response.content)
+        else:
+            context.bot.send_message(chat_id=chat_id, text="لا يمكن تنزيل هذا النوع من الملفات من تيك توك.")
+    except Exception as e:
+        context.bot.send_message(chat_id=chat_id, text=f"حدث خطأ: {str(e)}")
+
+def download_twitter_media(url, chat_id, context):
+    """تنزيل الوسائط من تويتر"""
+    try:
+        response = requests.get(url, allow_redirects=True)
+        if "image" in response.headers.get('Content-Type', ''):
+            context.bot.send_photo(chat_id=chat_id, photo=response.content)
+        elif "video" in response.headers.get('Content-Type', ''):
+            context.bot.send_video(chat_id=chat_id, video=response.content)
+        else:
+            context.bot.send_message(chat_id=chat_id, text="لا يمكن تنزيل هذا النوع من الملفات من تويتر.")
+    except Exception as e:
+        context.bot.send_message(chat_id=chat_id, text=f"حدث خطأ: {str(e)}")
+
+def main():
+    """تشغيل البوت"""
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_link))
+    dp.add_handler(CallbackQueryHandler(handle_youtube_choice, pattern='youtube_.*'))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
+​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
